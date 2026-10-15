@@ -1,0 +1,57 @@
+#!/bin/bash
+# mica-media-place — place a generated image into a repo's assets/ and commit.
+# The generation itself happens via the agent's media tools; this handles
+# naming, placement, README wiring, and git.
+#
+# Usage: mica-media-place <repo-slug> <image-path> <asset-name> [--readme]
+#
+# Example:
+#   mica-media-place persistent-browser /tmp/gen-icon.webp icon --readme
+#   → assets/icon.png, README updated to reference it, committed.
+
+set -euo pipefail
+SLUG="$1"
+SRC="$2"
+NAME="$3"
+README_FLAG="${4:-}"
+
+REPO="$HOME/workspace/micaforge/repos/$SLUG"
+ASSETS="$REPO/assets"
+if [ ! -d "$REPO" ]; then echo "no repo: $REPO" >&2; exit 1; fi
+mkdir -p "$ASSETS"
+
+# Convert to png if needed (github renders png reliably)
+DEST="$ASSETS/$NAME.png"
+if [[ "$SRC" == *.png ]]; then
+  cp "$SRC" "$DEST"
+else
+  python3 -c "
+from PIL import Image
+img = Image.open('$SRC')
+img.save('$DEST')
+print('converted to png')
+" 2>/dev/null || cp "$SRC" "$DEST"
+fi
+echo "placed: assets/$NAME.png"
+
+if [ "$README_FLAG" = "--readme" ]; then
+  # Replace the logo.svg reference with the new asset (first img tag)
+  python3 - "$REPO/README.md" "$NAME" << 'EOF'
+import sys, re
+path, name = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    content = f.read()
+content = re.sub(r'<img src="assets/[^"]+"([^>]*)/>',
+                 f'<img src="assets/{name}.png"\\1/>',
+                 content, count=1)
+with open(path, "w") as f:
+    f.write(content)
+print("README updated")
+EOF
+fi
+
+cd "$REPO"
+git add -A
+git -c user.name="micaforge-ai" -c user.email="micaforge@gravicity.ai" \
+    commit -qm "Media: $NAME" 2>/dev/null || echo "(nothing new to commit)"
+echo "done — push when ready: cd $REPO && git push"
