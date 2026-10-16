@@ -1,41 +1,81 @@
 #!/bin/bash
-# mica-media-place — place a generated image into a repo's assets/ and commit.
-# The generation itself happens via the agent's media tools; this handles
-# naming, placement, README wiring, and git.
+# mica-media-place — place generated media into a repo's assets/ with sizes.
 #
-# Usage: mica-media-place <repo-slug> <image-path> <asset-name> [--readme]
+# Keeps the original, generates standard sizes, wires up README, commits.
 #
-# Example:
-#   mica-media-place persistent-browser /tmp/gen-icon.webp icon --readme
-#   → assets/icon.png, README updated to reference it, committed.
+# Usage: mica-media-place <repo-slug> <image-path> <asset-name> [--readme] [--sizes 512,256,128]
+#
+# Output layout in assets/:
+#   <name>-original.webp    # untouched original from generation
+#   <name>-512.png          # standard sizes
+#   <name>-256.png
+#   <name>-128.png
+#   <name>.png              # symlink to default size for README references
+#
+# Examples:
+#   mica-media-place persistent-browser /tmp/gen.webp icon --readme
+#   mica-media-place myrepo /tmp/hero.png hero --sizes 1920,1280,640
 
 set -euo pipefail
 SLUG="$1"
 SRC="$2"
 NAME="$3"
-README_FLAG="${4:-}"
+README_FLAG=""
+SIZES="512,256,128"
+for arg in "${@:4}"; do
+  case "$arg" in
+    --readme) README_FLAG="--readme" ;;
+    --sizes=*) SIZES="${arg#--sizes=}" ;;
+  esac
+done
 
 REPO="$HOME/workspace/micaforge/repos/$SLUG"
 ASSETS="$REPO/assets"
 if [ ! -d "$REPO" ]; then echo "no repo: $REPO" >&2; exit 1; fi
+if [ ! -f "$SRC" ]; then echo "no source: $SRC" >&2; exit 1; fi
 mkdir -p "$ASSETS"
 
-# Convert to png if needed (github renders png reliably)
-DEST="$ASSETS/$NAME.png"
-if [[ "$SRC" == *.png ]]; then
-  cp "$SRC" "$DEST"
-else
-  python3 -c "
-from PIL import Image
-img = Image.open('$SRC')
-img.save('$DEST')
-print('converted to png')
-" 2>/dev/null || cp "$SRC" "$DEST"
+# Keep the original untouched
+EXT="${SRC##*.}"
+ORIG="$ASSETS/$NAME-original.$EXT"
+if [ "$SRC" != "$ORIG" ]; then
+  cp "$SRC" "$ORIG"
+  # If source was a raw generation file sitting in assets/, remove it
+  # (it's now preserved as <name>-original.<ext>)
+  case "$SRC" in
+    "$ASSETS"/media-generation-*) rm -f "$SRC" ;;
+  esac
 fi
-echo "placed: assets/$NAME.png"
+echo "original: assets/$NAME-original.$EXT ($(du -h "$ORIG" | cut -f1))"
+
+# Generate sizes
+DEFAULT_SIZE=$(echo "$SIZES" | cut -d',' -f1)
+IFS=',' read -ra SIZE_ARR <<< "$SIZES"
+for s in "${SIZE_ARR[@]}"; do
+  DEST="$ASSETS/$NAME-$s.png"
+  python3 - "$SRC" "$DEST" "$s" << 'EOF'
+import sys
+from PIL import Image
+src, dest, size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+img = Image.open(src)
+w, h = img.size
+side = min(w, h)
+left = (w - side) // 2
+top = (h - side) // 2
+img = img.crop((left, top, left + side, top + side))
+img = img.resize((size, size), Image.LANCZOS)
+if img.mode not in ("RGBA", "LA"):
+    img = img.convert("RGB")
+img.save(dest, "PNG", optimize=True)
+print(f"  {dest.split('/')[-1]} ({size}x{size})")
+EOF
+done
+
+# Default: symlink <name>.png -> <name>-<default>.png
+ln -sf "$NAME-$DEFAULT_SIZE.png" "$ASSETS/$NAME.png"
+echo "default: assets/$NAME.png -> $NAME-$DEFAULT_SIZE.png"
 
 if [ "$README_FLAG" = "--readme" ]; then
-  # Replace the logo.svg reference with the new asset (first img tag)
   python3 - "$REPO/README.md" "$NAME" << 'EOF'
 import sys, re
 path, name = sys.argv[1], sys.argv[2]
@@ -53,5 +93,5 @@ fi
 cd "$REPO"
 git add -A
 git -c user.name="micaforge-ai" -c user.email="micaforge@gravicity.ai" \
-    commit -qm "Media: $NAME" 2>/dev/null || echo "(nothing new to commit)"
-echo "done — push when ready: cd $REPO && git push"
+    commit -qm "Media: $NAME (original + sizes)" 2>/dev/null || echo "(nothing new)"
+echo "done — push when ready"

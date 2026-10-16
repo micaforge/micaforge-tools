@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# mica-image-check — verify all image references in markdown resolve to real files.
+# Use as a pre-push hook or run manually: mica-image-check [repo-dir]
+# Exit 1 if any image 404s.
+set -uo pipefail
+
+DIR="${1:-.}"
+cd "$DIR" || exit 1
+fail=0
+
+# Find all markdown files
+while IFS= read -r md; do
+  # Match ![alt](path) — capture path
+  grep -oh '!\[[^]]*\]([^)]*)' "$md" 2>/dev/null | sed 's/.*(\([^)]*\)).*/\1/' | while IFS= read -r src; do
+    # Skip URLs, anchors, badges (shields.io etc.)
+    case "$src" in
+      http*|https*|data:*|"") continue;;
+    esac
+    # Strip any #anchor or ?query
+    clean=$(echo "$src" | cut -d'#' -f1 | cut -d'?' -f1)
+    [[ -z "$clean" ]] && continue
+    # Resolve relative to the markdown file's dir
+    base=$(dirname "$md")
+    if [[ ! -f "$base/$clean" ]]; then
+      echo "BROKEN: $md -> $src (not found: $base/$clean)"
+      fail=1
+    fi
+  done
+  # Match <img src="path">
+  grep -oh '<img[^>]*src="[^"]*"' "$md" 2>/dev/null | sed 's/.*src="//;s/"$//' | while IFS= read -r src; do
+    case "$src" in
+      http*|https*|data:*|"") continue;;
+    esac
+    clean=$(echo "$src" | cut -d'#' -f1 | cut -d'?' -f1)
+    [[ -z "$clean" ]] && continue
+    base=$(dirname "$md")
+    if [[ ! -f "$base/$clean" ]]; then
+      echo "BROKEN: $md -> $src (not found: $base/$clean)"
+      fail=1
+    fi
+  done
+done < <(find . -name "*.md" -not -path "./node_modules/*" -not -path "./.git/*")
+
+# The fail flag doesn't propagate through pipes — recheck via temp file
+tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+while IFS= read -r md; do
+  {
+    grep -oh '!\[[^]]*\]([^)]*)' "$md" 2>/dev/null | sed 's/.*(\([^)]*\)).*/\1/'
+    grep -oh '<img[^>]*src="[^"]*"' "$md" 2>/dev/null | sed 's/.*src="//;s/"$//'
+  } | while IFS= read -r src; do
+    case "$src" in http*|https*|data:*|"") continue;; esac
+    clean=$(echo "$src" | cut -d'#' -f1 | cut -d'?' -f1)
+    [[ -z "$clean" ]] && continue
+    base=$(dirname "$md")
+    [[ -f "$base/$clean" ]] || echo "BROKEN $md -> $src"
+  done
+done < <(find . -name "*.md" -not -path "./node_modules/*" -not -path "./.git/*") > "$tmp"
+
+if [[ -s "$tmp" ]]; then
+  cat "$tmp"
+  echo "---"
+  echo "image-check FAILED: broken image links found"
+  exit 1
+fi
+echo "image-check OK: all image links resolve"
+exit 0

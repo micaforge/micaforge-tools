@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""mica-sync — keep local skill packages and their GitHub repos in sync.
+
+Usage:
+  mica-sync <package> [--to repo|local] [--push]
+
+Syncs between:
+  local: ~/workspace/custom-skills/<package>/
+  repo:  ~/workspace/micaforge/repos/<package>/
+
+Rules:
+- SKILL.md, bin/, workflows/, tools/, references/ sync both ways
+- README.md, LICENSE, assets/ are repo-only (never overwrite from local)
+- skill.yaml is local-only (never push to repo)
+- __pycache__, .git are ignored
+
+Default direction is --to repo (local is source of truth for code).
+Use --to local to pull repo changes back.
+
+Examples:
+  mica-sync persistent-browser           # local → repo, no push
+  mica-sync persistent-browser --push     # local → repo + git push
+  mica-sync persistent-browser --to local  # repo → local
+"""
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+
+SKILLS = os.path.expanduser("~/workspace/custom-skills")
+REPOS = os.path.expanduser("~/workspace/micaforge/repos")
+
+# Dirs/files that sync both ways
+SYNCED = ["SKILL.md", "bin", "workflows", "tools", "references"]
+# Repo-only (never touch from local)
+REPO_ONLY = ["README.md", "README.template.md", "LICENSE", "assets", "PACKAGE.md", "AUDIT.md"]
+# Local-only (never push to repo)
+LOCAL_ONLY = ["skill.yaml", "__pycache__", ".git"]
+
+
+def sync_dir(src, dst):
+    """Sync src dir to dst dir, preserving dst-only files."""
+    for root, dirs, files in os.walk(src):
+        # Skip ignored
+        dirs[:] = [d for d in dirs if d not in LOCAL_ONLY]
+        rel = os.path.relpath(root, src)
+        dst_root = os.path.join(dst, rel) if rel != "." else dst
+        os.makedirs(dst_root, exist_ok=True)
+        for f in files:
+            if f in LOCAL_ONLY:
+                continue
+            s = os.path.join(root, f)
+            d = os.path.join(dst_root, f)
+            # Only copy if different
+            if not os.path.exists(d) or \
+               open(s, "rb").read() != open(d, "rb").read():
+                shutil.copy2(s, d)
+                print(f"  synced: {os.path.join(rel, f)}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("package")
+    ap.add_argument("--to", choices=["repo", "local"], default="repo")
+    ap.add_argument("--push", action="store_true")
+    args = ap.parse_args()
+
+    local = os.path.join(SKILLS, args.package)
+    repo = os.path.join(REPOS, args.package)
+    if not os.path.isdir(local):
+        print(f"no local skill: {local}", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.isdir(repo):
+        print(f"no repo: {repo}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.to == "repo":
+        print(f"syncing {args.package}: local → repo")
+        for item in SYNCED:
+            s = os.path.join(local, item)
+            if os.path.exists(s):
+                if os.path.isdir(s):
+                    sync_dir(s, os.path.join(repo, item))
+                else:
+                    d = os.path.join(repo, item)
+                    if not os.path.exists(d) or \
+                       open(s, "rb").read() != open(d, "rb").read():
+                        shutil.copy2(s, d)
+                        print(f"  synced: {item}")
+        print("  (repo-only files preserved: README, LICENSE, assets/)")
+        if args.push:
+            print("committing + pushing...")
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+            r = subprocess.run(
+                ["git", "-c", "user.name=micaforge-ai",
+                 "-c", "user.email=micaforge@gravicity.ai",
+                 "commit", "-qm", f"Sync from local skill ({args.package})"],
+                cwd=repo, capture_output=True)
+            if r.returncode == 0:
+                subprocess.run(["git", "push"], cwd=repo, check=True)
+                print("  pushed")
+            else:
+                print("  nothing new to commit")
+    else:
+        print(f"syncing {args.package}: repo → local")
+        for item in SYNCED:
+            s = os.path.join(repo, item)
+            if os.path.exists(s):
+                if os.path.isdir(s):
+                    sync_dir(s, os.path.join(local, item))
+                else:
+                    d = os.path.join(local, item)
+                    if not os.path.exists(d) or \
+                       open(s, "rb").read() != open(d, "rb").read():
+                        shutil.copy2(s, d)
+                        print(f"  synced: {item}")
+        print("  (local-only files preserved: skill.yaml)")
+
+if __name__ == "__main__":
+    main()

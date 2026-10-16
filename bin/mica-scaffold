@@ -106,6 +106,13 @@ def main():
 
     # Git init + commit
     subprocess.run(["git", "init", "-q"], cwd=dest, check=True)
+    # Install pre-push audit hook from template
+    hook_src = os.path.join(TEMPLATE_DIR, "hooks", "pre-push")
+    hook_dst = os.path.join(dest, ".git", "hooks", "pre-push")
+    if os.path.exists(hook_src):
+        shutil.copy2(hook_src, hook_dst)
+        os.chmod(hook_dst, 0o755)
+        print("  installed pre-push audit hook")
     subprocess.run(["git", "add", "-A"], cwd=dest, check=True)
     subprocess.run(["git", "-c", "user.name=micaforge-ai",
                     "-c", "user.email=micaforge@gravicity.ai",

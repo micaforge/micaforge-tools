@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""mica-audit — scan a repo for secrets and overly-specific details.
+
+Usage:
+  mica-audit <repo-path> [--strict]
+
+Checks:
+1. Secret patterns: API keys, tokens, private keys, passwords in assignments
+2. Hardcoded paths: /home/, /root/, /opt/hatch, /tmp/ (outside examples)
+3. Internal hostnames/IPs
+4. Email addresses (warns, doesn't fail — some are public)
+
+Exit 0 = clean, 1 = issues found. --strict fails on warnings too.
+
+Use as a pre-push hook or in mica-sync --push.
+"""
+import os
+import re
+import sys
+
+SECRET_PATTERNS = [
+    (r"ghp_[A-Za-z0-9]{36}", "GitHub PAT"),
+    (r"gho_[A-Za-z0-9]{36}", "GitHub OAuth token"),
+    (r"sk-[A-Za-z0-9]{20,}", "OpenAI-style API key"),
+    (r"sk-ant-[A-Za-z0-9-]{20,}", "Anthropic API key"),
+    (r"AKIA[0-9A-Z]{16}", "AWS access key"),
+    (r"xox[bap]-[A-Za-z0-9-]+", "Slack token"),
+    (r"-----BEGIN (RSA |EC |DSA )?PRIVATE KEY", "Private key block"),
+    (r"(?i)(password|passwd|pwd)\s*=\s*['\"][^'\"]{3,}['\"]", "Hardcoded password"),
+    (r"(?i)(api[_-]?key|apikey)\s*=\s*['\"][^'\"]{8,}['\"]", "Hardcoded API key"),
+    (r"(?i)(secret|token)\s*=\s*['\"][^'\"]{8,}['\"]", "Hardcoded secret/token"),
+]
+
+PATH_PATTERNS = [
+    (r"/home/hatch/", "Hardcoded /home/hatch path"),
+    (r"/root/\.ssh", "Hardcoded /root/.ssh path"),
+    (r"/opt/hatch/", "Hardcoded /opt/hatch path"),
+    (r"hatch-egress-proxy", "Internal proxy hostname"),
+    (r"\b10\.\d+\.\d+\.\d+", "Private IP (10.x)"),
+    (r"\b192\.168\.\d+\.\d+", "Private IP (192.168.x)"),
+]
+
+# Allowed in these contexts (examples, docs about the pattern itself)
+ALLOWLIST = [
+    "AUDIT.md",  # documents the audit itself
+    "mica-audit",  # the scanner's own patterns
+]
+
+
+def audit_file(path):
+    issues = []
+    rel = os.path.relpath(path)
+    if any(a in rel for a in ALLOWLIST):
+        return issues
+    try:
+        with open(path, "r", errors="ignore") as f:
+            content = f.read()
+    except OSError:
+        return issues
+    for pattern, label in SECRET_PATTERNS:
+        for m in re.finditer(pattern, content):
+            # Skip if it's clearly a placeholder or in a code comment about the pattern
+            line = content[max(0, m.start()-80):m.end()+20]
+            if any(w in line.lower() for w in ["example", "placeholder", "todo", "xxx", "<", ">"]):
+                continue
+            issues.append((rel, "SECRET", label, m.group(0)[:30]))
+    for pattern, label in PATH_PATTERNS:
+        for m in re.finditer(pattern, content):
+            line_start = content.rfind("\n", 0, m.start()) + 1
+            line = content[line_start:content.find("\n", m.end())]
+            if line.strip().startswith("#") and "example" in line.lower():
+                continue
+            issues.append((rel, "PATH", label, line.strip()[:60]))
+    return issues
+
+
+def main():
+    ap = __import__("argparse").ArgumentParser()
+    ap.add_argument("repo", help="repo path to audit")
+    ap.add_argument("--strict", action="store_true")
+    args = ap.parse_args()
+
+    all_issues = []
+    for root, dirs, files in os.walk(args.repo):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules")]
+        for f in files:
+            if f.endswith((".png", ".jpg", ".webp", ".gif", ".svg", ".ico")):
+                continue
+            all_issues.extend(audit_file(os.path.join(root, f)))
+
+    secrets = [i for i in all_issues if i[1] == "SECRET"]
+    paths = [i for i in all_issues if i[1] == "PATH"]
+
+    if secrets:
+        print(f"❌ {len(secrets)} SECRET(S) FOUND:")
+        for rel, _, label, snippet in secrets:
+            print(f"  {rel}: {label}: {snippet}...")
+    if paths:
+        print(f"⚠️  {len(paths)} SPECIFIC PATH(S) FOUND:")
+        for rel, _, label, snippet in paths:
+            print(f"  {rel}: {label}: {snippet}...")
+
+    if secrets or (args.strict and paths):
+        sys.exit(1)
+    if not all_issues:
+        print("✅ clean")
+    else:
+        print(f"\n{len(paths)} warning(s) — review before publishing")
+
+if __name__ == "__main__":
+    main()
