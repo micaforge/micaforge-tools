@@ -29,7 +29,7 @@ for arg in "${@:4}"; do
   esac
 done
 
-REPO="$HOME/workspace/micaforge/repos/$SLUG"
+REPO="$HOME/workspace/projects/micaforge/repos/$SLUG"
 ASSETS="$REPO/assets"
 if [ ! -d "$REPO" ]; then echo "no repo: $REPO" >&2; exit 1; fi
 if [ ! -f "$SRC" ]; then echo "no source: $SRC" >&2; exit 1; fi
