@@ -6,7 +6,7 @@ Usage:
 
 Syncs between:
   local: ~/workspace/custom-skills/<package>/
-  repo:  ~/workspace/micaforge/repos/<package>/
+  repo:  ~/workspace/projects/micaforge/repos/<package>/
 
 Rules:
 - SKILL.md, bin/, workflows/, tools/, references/ sync both ways
@@ -29,7 +29,7 @@ import subprocess
 import sys
 
 SKILLS = os.path.expanduser("~/workspace/custom-skills")
-REPOS = os.path.expanduser("~/workspace/micaforge/repos")
+REPOS = os.path.expanduser("~/workspace/projects/micaforge/repos")
 
 # Dirs/files that sync both ways
 SYNCED = ["SKILL.md", "bin", "workflows", "tools", "references"]

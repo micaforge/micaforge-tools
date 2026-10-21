@@ -23,7 +23,7 @@ looking like it belongs.
 
 ```bash
 git clone https://github.com/micaforge/micaforge-tools.git
-ln -s ~/workspace/micaforge/repos/micaforge-tools/bin/* ~/workspace/bin/
+ln -s ~/workspace/projects/micaforge/repos/micaforge-tools/bin/* ~/workspace/bin/
 ```
 
 ## 📖 Scripts

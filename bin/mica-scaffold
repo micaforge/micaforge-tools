@@ -18,8 +18,8 @@ import shutil
 import subprocess
 import sys
 
-TEMPLATE_DIR = os.path.expanduser("~/workspace/micaforge/repos/micaforge-template")
-REPOS_DIR = os.path.expanduser("~/workspace/micaforge/repos")
+TEMPLATE_DIR = os.path.expanduser("~/workspace/projects/micaforge/repos/micaforge-template")
+REPOS_DIR = os.path.expanduser("~/workspace/projects/micaforge/repos")
 
 AGENT_EXTRA = {
     "SKILL.md": "# {title}\n\n{{tagline}}\n\n## Use when\n\n- \n\n## Quick start\n\n```bash\n```\n",
